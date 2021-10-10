@@ -1,0 +1,229 @@
+---
+title: "Homework 2"
+author: "Julien Ward"
+date: "null"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  word_document: default
+---
+
+# Create Machine Learning Workflow using NYC flights data
+
+As demonstrated in the tutorial shared for the Week 10 lesson, provide the machine learning workflow by incorporating the following steps. You are expected to build a model for predicting the **dep_delay** as a function of other variables. 
+
+1. Split the data into training and test sets
+
+2. Feature engineer the training data 
+
+3. Specify a linear regression model
+
+4. Train our model on the training data
+
+5. Transform the test data with steps learned in part 2 and obtain predictions using the trained model
+
+And finally use the model to interpret the key metrics. Bulk of the grade points will be assigned to Q6.Use the Week10 tutorial as guide for this homework.
+
+Use the following cleaned up version of the flights data for your analysis.This dataset has been created by joining the flights and weather dataset from nycflights13. The objective of this analysis is to gauge if weather and location plays a role in the prediction of the departure delay. 
+Submit the RMD file along with a word document for this homework.
+
+```{r}
+
+# Make sure to read Chapter 3 in ISLR to make sure you are answering your interpretations correctly.
+
+
+library(nycflights13)
+library(tidymodels)
+library(broom)
+library(vip)
+set.seed(123)
+
+flight_data <- 
+  flights %>% 
+  mutate(
+  # We will use the date (not date-time) in the recipe below
+    date = as.Date(time_hour)
+  ) %>% 
+  # Include the weather data
+  inner_join(weather, by = c("origin", "time_hour")) %>% 
+  # Only retain the specific columns we will use
+  select(dep_time, flight, origin, dest, air_time, distance, 
+         carrier, arr_delay, dep_delay, temp, wind_speed, wind_gust, precip, visib, date) %>% 
+  # Exclude missing data
+  na.omit() %>% 
+  # For creating models, it is better to have qualitative columns
+  # encoded as factors (instead of character strings)
+  mutate_if(is.character, as.factor)
+
+```
+
+## Q1: Data Splitting
+```{r}
+# Objects to be created - flights_split, flights_training, and flights_test
+flights_split <- initial_split(flight_data, prop = .90, strata = dep_delay)
+
+
+# Create the training data
+flights_training <- flights_split %>%
+  training()
+
+# Create the test data
+flights_test <- flights_split %>% 
+  testing()
+
+```
+
+## Q2 : Feature Engineering
+
+Explore and use the following step functions for the feature engineering along with the recipe specification.
+
+* For date variable
+  + step_date with features "dow" and "month" - for eg step_date(date, features = c("dow", "month"))
+  + step_rm(date) to remove the date, once you have converted it into a numeric data
+  + step_holiday(date, holidays = timeDate::listHolidays("US")), this would generate a binary variable, which would indicate if a date is holiday or not
+  
+Additionally create dummy variables for all categorical values by using step_dummy, and use step_zv to remove any variable which has single value.
+
+```{r}
+# Objects to be created recipe - flights_recipe
+flights_recipe <- recipe(dep_delay ~ ., data = flight_data) %>%
+  step_date(date, features = c("dow", "month")) %>%
+  step_rm(date) %>%
+  step_holiday(date, holidays = timeDate::listHolidays("US")) %>%
+  step_dummy(all_nominal(), -all_outcomes()) %>%
+  step_zv(all_predictors())
+
+summary(flights_recipe)
+
+
+flights_recipe
+
+
+```
+
+### Q3 : Specify a Model
+
+Next, specify a linear regression model with `parsnip`.
+
+```{r}
+lm_model <- linear_reg() %>%
+  set_engine('lm') %>%
+  set_mode('regression')
+
+lm_model
+```
+
+## Q4 : Create a Workflow
+
+```{r}
+flights_workflow <- workflow() %>%
+  add_model(lm_model) %>%
+  add_recipe(flights_recipe)
+
+flights_workflow
+
+```
+
+## Q5 : Execute the Workflow
+
+```{r}
+
+flights_fit <- flights_workflow %>%
+  last_fit(split = flights_split)
+
+```
+
+## Q6 :Collecting and Interpreting Metrics
+
+### Q6a Obtain performance metrics on test data
+
+```{r}
+#Performance metrics
+lm_fit <- lm_model %>%
+  fit(dep_delay ~ ., data = flights_training)
+glance(lm_fit)
+
+```
+### Q6b Obtain the test set predictions data frame
+```{r}
+#flights_predict <- predict(lm_fit, flights_test)
+
+``` 
+
+### Q6c  Fit the model to training data and provide your interpretations on the F-Statistic, R Square, and partial F-Test, specifically for the variables origin(any dummy generated), temp, wind_speed, and precip.
+
+```{r}
+
+lm_fit <- lm_model %>%
+  fit(dep_delay ~ ., data = flights_training)
+
+summary(lm_fit$fit)
+
+```
+We can note based on the t values for temp, wind_speed, precip, and originJFK and originLGA that the they are significant by 0, significant by .001, not significant, significant by 0 and significant by 0 respectively. The adjusted R-squared notes that the 89% variation in departure delayes are explained by the significant variables in our model. The F-stat of 3667 being high and p-value of <2.2e-16  being low point to one of the variables being associated with departure delays. 
+
+### Q6d  Provide the regression diagnostic plots, and provide your interpretation of the diagnostic plots
+Following link provides a good primer on the diagnostic plots.
+https://data.library.virginia.edu/diagnostic-plots/
+
+```{r}
+# Diagnostic Plots
+par(mfrow = c(2,2))
+plot(lm_fit$fit, pch = 16, col = '#8A2BE2')
+
+```
+The results for the Residuals vs. Fitted plot shows a weak pattern along the resiguals, overall, with a substantial amount of deviation from 0-200 along the X axis. This indicates a stronger pattern for linearity in our data. 
+
+For the Normal Q-Q plot, there appears to be a 3rd degree polynomial distribution of the residuals, or heavy tails rather than a linear distribution. That being said, there are a substantial amount of residuals along the trendline, which would be favorable if the data did not seem to show more extreme values than a normal distribution would. 
+
+The Scale-Location plot shows a strong concentration of residuals along the fitted values from 0-300 on the X axis. This points to a lack of equal variance in the data. 
+
+The Residuals vs Leverage plot shows  that the data cases are largely within Cook's distance except case 37856, which is at the border. Other that case 37865, the regression results won't be altered by excluding any cases. 
+
+### Q6e  Use the vip() function to provide the importance of different predictor variables, and specify which are the top 5 predictor variables. Provide your interpretation on the number 1 predictor variable, as to why that may cause the departure delay
+
+```{r}
+vip(lm_fit)
+
+```
+
+### Q6f Evaluate the test set accurracy and provide your interpretations on the fit based on the first 5 rows.
+
+```{r}
+
+#flights_test_results <- predict(lm_fit, new_data = flights_test) %>%
+#bind_cols(flights_test)
+
+#flights_test_results
+
+```
+
+### Q6g Calculate RMSE and R^2^ on the test set and provide your interpretations
+
+```{r}
+# RMSE on test set
+#rmse(flights_test_results, truth = dep_delay, estimate = .pred)
+
+```
+
+```{r}
+# R2 on test set
+#rsq(flights_test_results,
+#truth = dep_delay,
+#estimate = .pred)
+```
+
+### Q6h Provide the R^2^ plot for the model fit using the testing data and provide comments on the plot.
+
+```{r}
+#R2 plot
+#ggplot(data = flights_test_results, mapping = aes(x =
+#.pred, y = dep_delay)) +
+#geom_point(color = '#006EA1') +
+#geom_abline(intercept = 0, slope = 1, color = 'orange') +
+#labs(title = 'Linear Regression Results for Flights Test
+#Set', x = 'Predicted Departures', y = 'Delayed Departures')
+``` 
+From the chart we can notice a linear trend in the delayed departures with most predicted departures being skewed to the left. From previous visualizations we can also note that arrival delays are the most significant variable on departure delays.
+--- End of Homework 2 ---
